@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import yahooFinance from 'yahoo-finance2';
 
+/**
+ * 
+ * @param request 
+ * @returns documentResponses: [{ documentType: string; fiscalPeriod: string; documentResponse: string; }[]]
+ */
 export async function POST(
     request: NextRequest,
 ) {
@@ -14,7 +19,7 @@ export async function POST(
     if (assetProfile.assetProfile?.irWebsite) {
         // if we have the IR website, great now we can start the next step of getting earnings reports
         irWebsite = assetProfile.assetProfile.irWebsite;
-        return NextResponse.json({ irWebsite: irWebsite });
+        return NextResponse.json({ documentResponses: [{ documentType: body.documentType[0], fiscalPeriod: body.fiscalPeriod[0], documentResponse: irWebsite }] });
 
     } else {
         // if Yahoo Finance doesn't have a generic website, throw an error for now
@@ -25,11 +30,11 @@ export async function POST(
         if (assetProfile.assetProfile?.website?.includes('invest')) {
             irWebsite = assetProfile.assetProfile.website;
             // if we have the IR website, great now we can start the next step of getting earnings reports
-            return NextResponse.json({ irWebsite: irWebsite });
+            return NextResponse.json({ documentResponses: [{ documentType: body.documentType[0], fiscalPeriod: body.fiscalPeriod[0], documentResponse: irWebsite }] });
         }
         // if we don't have the IR website, we can get the company's website, and then we will use a utility to find the IR website
         irWebsite = await findIRWebsite(assetProfile.assetProfile.website.replace('https://www.', ''));
-        return NextResponse.json({ irWebsite: irWebsite });
+        return NextResponse.json({ documentResponses: [{ documentType: body.documentType[0], fiscalPeriod: body.fiscalPeriod[0], documentResponse: irWebsite }] });
     }
 }
 
