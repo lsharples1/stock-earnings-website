@@ -5,6 +5,7 @@ import { JSDOM } from 'jsdom';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { getJson } from 'serpapi';
+import { stat } from "fs";
 
 /**
  * 
@@ -29,10 +30,10 @@ async function getDocumentResponses(body: { ticker: string; documentType: string
     console.log('investorRelationsPageUrl', investorRelationsPageUrl);
 
      // 2. using the investor relations website, get the quarterly results page url
-     const quarteryResultsPageUrl = await getQuarterlyResultsPageUrl(investorRelationsPageUrl);
-     console.log('quarteryResultsPageUrl', quarteryResultsPageUrl);
+     const quarterlyResultsPageUrl = await getQuarterlyResultsPageUrl(investorRelationsPageUrl);
+     console.log('quarterlyResultsPageUrl', quarterlyResultsPageUrl);
      // 3. using the quarterly results page, get the documents for the specified document type(s) and fiscal period(s)
-     const documentResponses = await findDocumentsFromIRWebsite(quarteryResultsPageUrl, body.documentType, body.fiscalPeriod);
+     const documentResponses = await findDocumentsFromIRWebsite(quarterlyResultsPageUrl, body.documentType, body.fiscalPeriod);
      console.log('documentResponses', documentResponses);
      return documentResponses;
 }
@@ -105,13 +106,13 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     const webcastKeywords = ['webcast', 'call', 'webinar', 'conference'];
 
     let keywords = ['earn', 'earnings', 'invest', 'investor', 'press', 'analyst'];
-    if (documentType.includes('EarningsRelease')) {
+    if (documentType.includes('Release')) {
         keywords = keywords.concat(relaseKeywords);
     } 
-    if (documentType.includes('EarningsPresentation')) {
+    if (documentType.includes('Presentation')) {
         keywords = keywords.concat(presentationKeywords);
     }
-    if (documentType.includes('EarningsWebcast')) {
+    if (documentType.includes('Webcast')) {
         keywords = keywords.concat(webcastKeywords);
     }
 
@@ -119,9 +120,15 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     // remove any duplicates
     relevantTerms = [...new Set(relevantTerms)];
     console.log('relevantTermms', relevantTerms);
+
+    const needUserAgent = await checkIfWeNeedUserAgent(quarteryResultsPageUrl);
+    console.log('needUserAgent', needUserAgent);
  
     // first we need to scrape the quarterly results page to find the links to the documents
-    let visibleLinks = await scrapeVisiblePageForLinks(quarteryResultsPageUrl, relevantTerms);
+    let visibleLinks = await scrapeVisiblePageForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
+
+    // const visibleLinks = await scrapeVisiblePageForLinksUnfiltered(quarteryResultsPageUrl);
+
     console.log('visibleLinks', visibleLinks);
 
 
@@ -140,7 +147,8 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
         You are given a list of links to documents on the quarterly earnings results page of the investor relations website.
         You are also given a list of document types: Earnings Presentation (which may also have a name similar to Analyst Slide Deck or Investor Presentation), Earnings Webcast (which may also have a name similar to Earnings Call, Earnings Webinar, or Conference Call), and Earnings Release (which may also have a name similar to Earnings Report, Earnings Press Release, or Earnings Summary).
         You are also given a list of fiscal periods to return documents for in the format of '1Q2024', '4Q2023', etc.
-        Given the links, find the documents for the specified document type(s) and fiscal period(s) and return a JSON ARRAY of this format, with no other text surrounding it: [{documentType: string, fiscalPeriod: string, documentResponse: link.href}]. If any of the documents are not found, the documentResponse should be 'Document not found'.
+        Given the href links and text, find the documents for the specified document type(s) and fiscal period(s) and return a JSON ARRAY of this format, with no other text surrounding it: [{documentType: string, fiscalPeriod: string, documentResponse: link.href}] YOU MUST USE THE EXACT HREF LINK IN THE documentResponse.
+        If any of the documents are not found, the documentResponse should be 'Document not found'.
         The links are: \n\n${JSON.stringify(visibleLinks)}
         The document types are: ${documentType.join(', ')}
         The fiscal periods are: ${fiscalPeriod.join(', ')}
@@ -174,22 +182,21 @@ async function scrapePageForLinks(irWebsite: string, relevantTerms: string[]) {
     }
     ).filter(Boolean);
 
-
-
-    // const linkDetails = Array.from(links).map(link => ({
-    //     href: link.href,  // Get the href attribute
-    //     text: link.textContent.trim()  // Get the text content, trimmed
-    // }));
     console.log('linkDetails', linkDetails);
     return linkDetails;  // You might want to return this if needed elsewhere
 }
 
-async function scrapeVisiblePageForLinks(irWebsite: string, relevantTerms: string[]) {
+async function scrapeVisiblePageForLinks(irWebsite: string, relevantTerms: string[], needUserAgent: boolean) {
     console.log('irWebsite', irWebsite);
     console.log('relevantTerms', relevantTerms);
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
-    await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
+    if (needUserAgent) {
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
+    }
+    let status = await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
+    status = status.status();
+    console.log('status', status);
 
     const anchors = await page.evaluate((relevantTerms) => {
         const links = Array.from(document.querySelectorAll('a'));
@@ -211,9 +218,22 @@ async function scrapeVisiblePageForLinks(irWebsite: string, relevantTerms: strin
     return anchors;
 }
 
-async function scrapeVisiblePageForSpans(irWebsite: string) {
-    console.log('irWebsite', irWebsite);
+async function checkIfWeNeedUserAgent(url: string) {
     const browser = await puppeteer.launch();
+    const page = await browser.newPage();
+    let status = await page.goto(url, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
+    status = status.status();
+    console.log('status', status);
+    await browser.close();
+    return status !== 200;
+
+}
+
+async function scrapeVisiblePageForLinksUnfiltered(irWebsite: string) {
+    console.log('irWebsite', irWebsite);
+    const browser = await puppeteer.launch({
+        headless: false,
+    });
     const page = await browser.newPage();
     await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
 
@@ -269,7 +289,7 @@ async function anthropicChatResponse(prompt: string) {
     const response = await anthropic.messages.create({
     model: "claude-3-opus-20240229",
     max_tokens: 1024,
-    system: "Repond to prompt with JSON",
+    system: "ONLY REPLY WITH JSON. DO NOT INCLUDE ANY TEXT OTHER THAN JSON IN YOUR RESPONSE.",
     messages: [
         { role: "user", content: prompt }
     ],

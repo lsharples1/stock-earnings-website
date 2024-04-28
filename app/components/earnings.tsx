@@ -47,7 +47,7 @@ export default function Earnings() {
             headers: {
             'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ ticker: ticker, documentType: documentType.length > 0 ? documentType : documentOptions.map(doc => doc.value), fiscalPeriod: fiscalPeriod.length > 0 ? fiscalPeriod : fiscalPeriodOptions.map(period => period.value)}),
+            body: JSON.stringify({ ticker: ticker, documentType: documentType.length > 0 ? documentType : documentOptions.map(doc => doc.label), fiscalPeriod: fiscalPeriod.length > 0 ? fiscalPeriod : fiscalPeriodOptions.map(period => period.value)}),
         })
         .then((response) => response.json())
         .then((data) => {
