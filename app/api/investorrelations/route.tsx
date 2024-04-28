@@ -45,19 +45,11 @@ async function getInvestorRelationsUrl(ticker: string) {
     
     });
     let irWebsite;
-    if (assetProfile.assetProfile?.irWebsite) {
-        // if we have the IR website, great now we can start the next step of getting earnings reports
-        return assetProfile.assetProfile.irWebsite;
-    } else {
-        if (assetProfile.assetProfile?.website) { // if we have the company's home page, we will use that to find the IR website
-            irWebsite = await getInvestorRelationsUrlUtil(assetProfile.assetProfile.website.replace('https://www.', ''));
-
-        } else if (assetProfile.assetProfile?.name) { // if we have the company's name, we will use that to find the IR website
-            irWebsite = await getInvestorRelationsUrlUtil(assetProfile.assetProfile.name);
+    if (assetProfile.assetProfile?.website) { // if we have the company's normal website, we will use that to find the IR website
+            irWebsite = await getInvestorRelationsUrlUtil(assetProfile.assetProfile.website);
         }
-        return irWebsite;
+    return irWebsite;
     }
-}
 
 async function getInvestorRelationsUrlUtil(ticker: string) {
     const serpResponse = await getJson({
@@ -79,7 +71,9 @@ async function getQuarterlyResultsPageUrl(irWebsite: string) {
     console.log('links', links.length);
 
     // create a propmt asking OpenAI to interpret the links to find the quarterly results page
-    const prompt = `Interpret the links to find the quarterly earnings results page for the company. Please return the link in this json format: {earningsPage: urlToEarningsPage} The links are: \n\n${links.map(link => link.href).join('\n')}`;
+    const prompt = `Interpret the links to find the quarterly earnings results page for the company. Please return the link in this json format: {earningsPage: urlToEarningsPage}.
+    Some links are complete URLs, some are relative URLs, ensure you return the full URL using this base website as a guide: ${irWebsite}.
+    The links are: \n\n${links.map(link => link.href).join('\n')}`;
     const response = await openAiChatResponse(prompt);
     return response.earningsPage;
 }
@@ -106,13 +100,13 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     const webcastKeywords = ['webcast', 'call', 'webinar', 'conference'];
 
     let keywords = ['earn', 'earnings', 'invest', 'investor', 'press', 'analyst'];
-    if (documentType.includes('Release')) {
+    if (documentType.includes('EarningsRelease')) {
         keywords = keywords.concat(relaseKeywords);
     } 
-    if (documentType.includes('Presentation')) {
+    if (documentType.includes('EarningsPresentation')) {
         keywords = keywords.concat(presentationKeywords);
     }
-    if (documentType.includes('Webcast')) {
+    if (documentType.includes('EarningsWebcast')) {
         keywords = keywords.concat(webcastKeywords);
     }
 
@@ -126,8 +120,6 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
  
     // first we need to scrape the quarterly results page to find the links to the documents
     let visibleLinks = await scrapeVisiblePageForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
-
-    // const visibleLinks = await scrapeVisiblePageForLinksUnfiltered(quarteryResultsPageUrl);
 
     console.log('visibleLinks', visibleLinks);
 
