@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import yahooFinance from 'yahoo-finance2';
-import puppeteer from "puppeteer";
-import { JSDOM } from 'jsdom';
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
+import { scrapeHomePageForLinks, scrapeDynamicContentForLinks, scrapeVisiblePageForLinks, checkIfWeNeedUserAgent } from "./webscrape";
+import { openAiChatResponse, anthropicChatResponse } from "./llmFunctions";
 import { getJson } from 'serpapi';
+import { mergeAndDedupeArrays, splitArray, generateClaudePrompt } from "./utils";
 
 /**
  * 
@@ -15,9 +14,7 @@ export async function POST(
     request: NextRequest,
 ) {
     const body = await request.json();
-    console.log('body', body);
     const retrieveDocuments = await getDocumentResponses(body);
-    console.log('retrieveDocuments', retrieveDocuments);
    
     return NextResponse.json({ documentResponses: retrieveDocuments});
 }
@@ -31,7 +28,7 @@ async function getDocumentResponses(body: { ticker: string; documentType: string
      // 2. using the investor relations website, get the quarterly results page url
      const quarterlyResultsPageUrl = await getQuarterlyResultsPageUrl(investorRelationsPageUrl);
      console.log('quarterlyResultsPageUrl', quarterlyResultsPageUrl);
-    // const quarterlyResultsPageUrl = 'https://investors.block.xyz/financials/quarterly-earnings-reports/default.aspx'
+
      // 3. using the quarterly results page, get the documents for the specified document type(s) and fiscal period(s)
      const documentResponses = await findDocumentsFromIRWebsite(quarterlyResultsPageUrl, body.documentType, body.fiscalPeriod);
      console.log('documentResponses', documentResponses);
@@ -67,7 +64,7 @@ async function getInvestorRelationsUrlUtil(ticker: string) {
 async function getQuarterlyResultsPageUrl(irWebsite: string) {
     const relevantTerms = ['earn', 'invest', 'relation', 'quarter', 'result', 'report', 'financ'];
     // first scrape the IR home page to find the link to the quarterly results page
-    const links = await scrapePageForLinks(irWebsite, relevantTerms);
+    const links = await scrapeHomePageForLinks(irWebsite, relevantTerms);
     console.log('links', links.length);
 
     // create a propmt asking OpenAI to interpret the links to find the quarterly results page
@@ -77,7 +74,6 @@ async function getQuarterlyResultsPageUrl(irWebsite: string) {
     const response = await openAiChatResponse(prompt);
     return response.earningsPage;
 }
-
 
 
 /**
@@ -151,281 +147,19 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     return response;  
 }
 
-function splitArray(array: string[]) {
-    const midIndex = Math.ceil(array.length / 2);
-    const firstPart = array.slice(0, midIndex);
-    const secondPart = array.slice(midIndex);
-    return [firstPart, secondPart];
-}
-
-    /**
-     * 
-     * @param visibleLinks links to the documents on the quarterly earnings results page of the investor relations website
-     * @param documentType array with > 1 of Earnings Presentation, Earnings Webcast, Earnings Release
-     * @param fiscalPeriod array with > 1 of 'xQyyyy' where x is the quarter and yyyy is the year
-     * @returns prompt to send to OpenAI
-     * With this prompt, what we want to accomplish is to get the links to the documents for the specified document type(s) and fiscal period(s)
-     * We will return the links in the format: [{documentType: string, fiscalPeriod: string, documentResponse: string}]. If any of the documents are not found, the documentResponse should be 'Document not found'
-     * There are a few other names for each document type, but this is not an exhaustive list, and more may be added in the future:
-     * Earnings Presentation: Analyst Slide Deck, Investor Presentation
-     * Earnings Webcast: Earnings Call, Earnings Webinar, Conference Call
-     * Earnings Release: Earnings Report, Earnings Press Release, Earnings Summary
-     */
-function generateClaudePrompt(visibleLinks: { href: string; text: string; }[], documentType: string[], fiscalPeriod: string[]) {
-    const prompt = `
-        You are given a list of links to documents on the quarterly earnings results page of the investor relations website.
-        You are also given a list of document types: Earnings Presentation (which may also have a name similar to Analyst Slide Deck or Investor Presentation), Earnings Webcast (which may also have a name similar to Earnings Call, Earnings Webinar, or Conference Call), and Earnings Release (which may also have a name similar to Earnings Report, Earnings Press Release, or Earnings Summary).
-        You are also given a list of fiscal periods to return documents for in the format of 'xQyyyy' where x is the quarter and yyyy is the year.
-        Given the href links and text, find the documents for the specified document type(s) and fiscal period(s) and return a JSON ARRAY of this format, with no other text surrounding it: [{documentType: string, fiscalPeriod: string, documentResponse: link.href}] YOU MUST USE THE EXACT HREF LINK IN THE documentResponse.
-        If any of the documents are not found, the documentResponse should be 'Document not found'.
-        The links are: \n\n${JSON.stringify(visibleLinks)}
-        The document types are: ${documentType.join(', ')}
-        The fiscal periods are: ${fiscalPeriod.join(', ')}
-    `
-    console.log('Generated Claude Prompt', prompt);
-    return prompt;
-}
-
-function mergeAndDedupeArrays(visibleLinks, hiddenLinks) {
-    const combinedLinks = [...visibleLinks, ...hiddenLinks];
-    const uniqueLinksMap = new Map();
-
-    for (const link of combinedLinks) {
-        // Use the href and text as the key because both properties are used to determine uniqueness
-        const key = `${link.href}|${link.text}`;
-        if (!uniqueLinksMap.has(key)) {
-            uniqueLinksMap.set(key, link);
-        }
-    }
-    // Convert the map values back to an array
-    return Array.from(uniqueLinksMap.values());
-
-}
 
 
 
-async function scrapePageForLinks(irWebsite: string, relevantTerms: string[]) {
-    const data = await fetch(irWebsite);
-    const html = await data.text();
-
-    const { document } = (new JSDOM(html)).window;
-
-    // Get all <a> tags from the document
-    const links = document.querySelectorAll('a');
-    // only return if href and text content are not empty and text contains any of the relevant terms
-    const linkDetails = Array.from(links).map(link => {
-        if (link.href && link.textContent.trim() && relevantTerms.some(term => link.textContent.trim().toLowerCase().includes(term.toLowerCase()))) {
-            return { href: link.href, text: link.textContent.trim() }
-        } else {
-            return null;
-        }
-    }
-    ).filter(Boolean);
-
-    return linkDetails;  // You might want to return this if needed elsewhere
-}
-
-async function scrapeVisiblePageForLinks(irWebsite: string, relevantTerms: string[], needUserAgent: boolean) {
-
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    if (needUserAgent) {
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
-    }
-    await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
 
 
-    const relevantAnchors = await findRelevantAnchors(page, relevantTerms);
 
-    console.log('Length from scraping visible page for anchors', relevantAnchors.length);
-    await browser.close();
-    return relevantAnchors;
-}
 
-async function scrapeDynamicContentForLinks(irWebsite: string, relevantTerms: string[], needUserAgent: boolean) {
-    console.log('irWebsite', irWebsite);
-    console.log('relevantTerms', relevantTerms);
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    try {
 
-        if (needUserAgent) {
-            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
-        }
-        await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
 
-        let allAnchors = [];
 
-        // click on year selectors if they exist
-        const selectors = await page.evaluate(() => {
-            const selectors = Array.from(document.querySelectorAll('select'));
-            return selectors.map(selector => {
-                return { name: selector.name, options: Array.from(selector.querySelectorAll('option')).map(option => option.value), class: selector.className, id: selector.id};
-            });
-        });
 
-        for (let i = 0; i < selectors.length; i++) {
-            const relevantOptions = selectors[i].options.filter(option => relevantTerms.some(term => option.toLowerCase().includes(term.toLowerCase())));
-            if (relevantOptions.length === 0) {
-                console.log(`skipping selector ${i}, no relevant options`);
-                continue;
-            }
-            console.log(`relevantOptions for selector ${i}`, relevantOptions);
-            
 
-            for (const option of relevantOptions) {
-                console.log(`clicking on selector, ${i} option ${option}`);
-                // only click on selectors that contain relevant terms
-                await page.select(`#${selectors[i].id}`, option);
-                await new Promise(r => setTimeout(r, 3000));
-                const relevantAnchors = await findRelevantAnchors(page, relevantTerms);
-                console.log('evaluatePageForRelevantAnchors', relevantAnchors);
-                console.log(` anchors in dynamic content for selector ${i}, option ${option}`, relevantAnchors);
-                allAnchors = allAnchors.concat(relevantAnchors);
-               
 
-            }
 
-        }
-
-        await browser.close();
-        console.log('number of anchors', allAnchors.length)
-        return allAnchors;
-        
-    } catch (error) {
-        console.error('Error with scraping dynamic content', error);
-        browser.close();
-    }
-}
-
-async function findRelevantAnchors(page, relevantTerms: string[]) {
-    const anchors = await page.evaluate((relevantTerms) => {
-        const links = Array.from(document.querySelectorAll('a'));
-        return links.map(link => {
-            // Combine text from all child <span> elements
-            let spansText = Array.from(link.querySelectorAll('span'))
-            spansText = spansText.map(span => span.textContent.trim()).join(' ');
-                                   
-            const fullText = `${link.textContent.trim()} ${spansText}`.trim().toLowerCase();
-            // Filter check for fiscal periods, years, and keywords
-            
-            const isRelevantLink = relevantTerms.some(term => fullText.includes(term.toLowerCase()) || link.href.includes(term.toLowerCase()));
-            return isRelevantLink ? { href: link.href, text: link.textContent.trim() } : null;
-        }).filter(Boolean); // Remove any nulls from the array
-    }, relevantTerms);
-    console.log('evaluatePageForRelevantLinks', anchors);
-    return anchors;
-}
-
-async function checkIfWeNeedUserAgent(url: string) {
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
-    let status = await page.goto(url, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
-    status = status.status();
-    console.log('status', status);
-    await browser.close();
-    return status !== 200;
-
-}
-
-// async function scrapeVisiblePageForLinksUnfiltered(irWebsite: string) {
-//     console.log('irWebsite', irWebsite);
-//     const browser = await puppeteer.launch({
-//         headless: false,
-//     });
-//     const page = await browser.newPage();
-//     await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
-
-//     const anchors = await page.evaluate(() => {
-//         const links = Array.from(document.querySelectorAll('a'));
-//         const linksToReturn = [];
-//         links.map(link => {
-//             linksToReturn.push({href: link.href, text: link.textContent.trim(), class: link.className});
-//         })
-//         return linksToReturn;
-//     }
-//     );
-//     console.log('SPANS', anchors.length);
-
-//     await browser.close();
-//     return anchors;
-// }
-
-/**
- * 
- * @param prompt the prompt to send to OpenAI
- * @returns the response from OpenAI
- */
-async function openAiChatResponse(prompt: string) {
-    const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY!,
-      });
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-      })
-        console.log('openai response', response);
-        const message = response.choices[0].message;
-        console.log('message', message);
-        if (message.content) {
-            return JSON.parse(message.content)
-        } else {
-            console.error('Error with OpenAI response', message);
-            throw new Error('Error with OpenAI response');
-        }
-}
-
-async function anthropicChatResponse(prompt: string) {
-    const anthropic = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY!,
-      });
-
-    const response = await anthropic.messages.create({
-    model: "claude-3-opus-20240229",
-    max_tokens: 4096,
-    system: "ONLY REPLY WITH JSON. DO NOT INCLUDE ANY TEXT OTHER THAN JSON IN YOUR RESPONSE.",
-    messages: [
-        { role: "user", content: prompt }
-    ],
-    });
-    console.log('anthropic response', response);
-    const message = response.content[0];
-    console.log('message', message);
-    if (message.text) {
-        const parsedResponse = parseJsonArrayUtil(message.text);
-        console.log('parsedResponse from anthropic model', parsedResponse);
-        return parsedResponse;
-    } else {
-        console.error('Error with Anthropic response', message);
-        throw new Error('Error with Anthropic response');
-    }
-}
-
-/**
- * 
- * @param text response from model
- * @returns JSON array
- * This function has a backup plan to remove any leading text before the first '['. Catches cases where the model adds extra text before the JSON which happens infrequently with prompt engineering, but easily fixed with this function.
- */
-function parseJsonArrayUtil(text: string) {
-    try {
-        return JSON.parse(text);
-    } catch (error) {
-        const firstCurly = text.indexOf('[');
-        if (firstCurly > -1) {
-            try {
-                return JSON.parse(text.substring(firstCurly));
-            } catch (secondError) {
-                console.error('Failed to parse on second attempt', secondError);
-            }
-        }
-        throw error; // Re-throw the original error if second attempt fails
-    }
-}
 
 
