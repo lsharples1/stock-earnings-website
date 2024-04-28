@@ -92,6 +92,8 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     // lets start with the quarter and year of the fiscal period which will be in the format '1Q2024'  but we want to separate the quarter and year
 
 
+
+
     const quarters = fiscalPeriod.map(period => period.substring(0, 2));
     const years = fiscalPeriod.map(period => period.substring(2));
 
@@ -128,36 +130,67 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     console.log('visibleLinks', visibleLinks);
 
 
+    // Determine if we need to split this into multiple requests: simple way is to get totalDocumentResponses =  documentType.length * fiscalPeriod.length
+    // If this is greater than 18, we should split it into multiple requests. Max number of totalDocumentResponses is 36 (3 document types * 12 fiscal periods). Have seen success with all 36, but is right at the limit so this provides a good buffer.
+    // Kind of a hacky way to do this- definitely better ways, but haven't seen major issues so not a priority to fix.
+    
+    const totalDocumentResponses = documentType.length * fiscalPeriod.length;
 
+    if (totalDocumentResponses > 18) {
+        console.log(`Splitting into chunks for ${documentType.length} document types and ${fiscalPeriod.length} fiscal periods`);
+        // create 2 arrays for documentType and fiscalPeriod by cutting in half like so: 
+        const [documentTypePrompt1, documentTypePrompt2] = splitArray(documentType);
+        const [fiscalPeriodPrompt1, fiscalPeriodPrompt2] = splitArray(fiscalPeriod);
 
-    // filter links to 
+        const prompt1 = generateClaudePrompt(visibleLinks.filter(link => link !== null), documentTypePrompt1, fiscalPeriodPrompt1);
+        const response1 = await anthropicChatResponse(prompt1);
 
-    // now we need a prompt to ask OpenAI to:
-    // 1. get the links to the documents for the specified document type(s) and fiscal period(s)
-    // 2. return the links in the format: [{documentType: string, fiscalPeriod: string, documentResponse: string}]. if any of the documents are not found, the documentResponse should be 'Document not found'
-    // as help in the prompt, here are a few other names for each document type, but this is not an exhaustive list:
-    // Earnings Presentation: Analyst Slide Deck, Investor Presentation
-    // Earnings Webcast: Earnings Call, Earnings Webinar, Conference Call
-    // Earnings Release: Earnings Report, Earnings Press Release, Earnings Summary
+        const prompt2 = generateClaudePrompt(visibleLinks.filter(link => link !== null), documentTypePrompt2, fiscalPeriodPrompt2);
+        const response2 = await anthropicChatResponse(prompt2);
 
+        let overallResponse = response1.concat(response2);
+        return overallResponse;
+    }
+
+    const prompt = generateClaudePrompt(visibleLinks.filter(link => link !== null), documentType, fiscalPeriod);
+    const response = await anthropicChatResponse(prompt);
+    return response;  
+}
+
+function splitArray(array: string[]) {
+    const midIndex = Math.ceil(array.length / 2);
+    const firstPart = array.slice(0, midIndex);
+    const secondPart = array.slice(midIndex);
+    return [firstPart, secondPart];
+}
+
+    /**
+     * 
+     * @param visibleLinks links to the documents on the quarterly earnings results page of the investor relations website
+     * @param documentType array with > 1 of Earnings Presentation, Earnings Webcast, Earnings Release
+     * @param fiscalPeriod array with > 1 of 'xQyyyy' where x is the quarter and yyyy is the year
+     * @returns prompt to send to OpenAI
+     * With this prompt, what we want to accomplish is to get the links to the documents for the specified document type(s) and fiscal period(s)
+     * We will return the links in the format: [{documentType: string, fiscalPeriod: string, documentResponse: string}]. If any of the documents are not found, the documentResponse should be 'Document not found'
+     * There are a few other names for each document type, but this is not an exhaustive list, and more may be added in the future:
+     * Earnings Presentation: Analyst Slide Deck, Investor Presentation
+     * Earnings Webcast: Earnings Call, Earnings Webinar, Conference Call
+     * Earnings Release: Earnings Report, Earnings Press Release, Earnings Summary
+     */
+function generateClaudePrompt(visibleLinks: { href: string; text: string; }[], documentType: string[], fiscalPeriod: string[]) {
     const prompt = `
         You are given a list of links to documents on the quarterly earnings results page of the investor relations website.
         You are also given a list of document types: Earnings Presentation (which may also have a name similar to Analyst Slide Deck or Investor Presentation), Earnings Webcast (which may also have a name similar to Earnings Call, Earnings Webinar, or Conference Call), and Earnings Release (which may also have a name similar to Earnings Report, Earnings Press Release, or Earnings Summary).
-        You are also given a list of fiscal periods to return documents for in the format of '1Q2024', '4Q2023', etc.
+        You are also given a list of fiscal periods to return documents for in the format of 'xQyyyy' where x is the quarter and yyyy is the year.
         Given the href links and text, find the documents for the specified document type(s) and fiscal period(s) and return a JSON ARRAY of this format, with no other text surrounding it: [{documentType: string, fiscalPeriod: string, documentResponse: link.href}] YOU MUST USE THE EXACT HREF LINK IN THE documentResponse.
         If any of the documents are not found, the documentResponse should be 'Document not found'.
         The links are: \n\n${JSON.stringify(visibleLinks)}
         The document types are: ${documentType.join(', ')}
         The fiscal periods are: ${fiscalPeriod.join(', ')}
     `
-    console.log('prompt', prompt);
-    const response = await anthropicChatResponse(prompt);
-    console.log('response', response);  
-    return response;  
-
-    // return [{ documentType: 'EarningsRelease', fiscalPeriod: '1Q2024', documentResponse: 'https://example.com' }];
+    console.log('Generated Claude Prompt', prompt);
+    return prompt;
 }
-
 
 
 
@@ -356,18 +389,35 @@ async function anthropicChatResponse(prompt: string) {
     const message = response.content[0];
     console.log('message', message);
     if (message.text) {
-        return JSON.parse(message.text);
+        const parsedResponse = parseJsonArrayUtil(message.text);
+        console.log('parsedResponse from anthropic model', parsedResponse);
+        return parsedResponse;
     } else {
         console.error('Error with Anthropic response', message);
         throw new Error('Error with Anthropic response');
     }
- 
+}
 
-
-      
-     
-
-
+/**
+ * 
+ * @param text response from model
+ * @returns JSON array
+ * This function has a backup plan to remove any leading text before the first '['. Catches cases where the model adds extra text before the JSON which happens infrequently with prompt engineering, but easily fixed with this function.
+ */
+function parseJsonArrayUtil(text: string) {
+    try {
+        return JSON.parse(text);
+    } catch (error) {
+        const firstCurly = text.indexOf('[');
+        if (firstCurly > -1) {
+            try {
+                return JSON.parse(text.substring(firstCurly));
+            } catch (secondError) {
+                console.error('Failed to parse on second attempt', secondError);
+            }
+        }
+        throw error; // Re-throw the original error if second attempt fails
+    }
 }
 
 
