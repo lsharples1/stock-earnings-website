@@ -346,7 +346,7 @@ async function anthropicChatResponse(prompt: string) {
 
     const response = await anthropic.messages.create({
     model: "claude-3-opus-20240229",
-    max_tokens: 1024,
+    max_tokens: 4096,
     system: "ONLY REPLY WITH JSON. DO NOT INCLUDE ANY TEXT OTHER THAN JSON IN YOUR RESPONSE.",
     messages: [
         { role: "user", content: prompt }

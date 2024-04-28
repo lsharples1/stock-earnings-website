@@ -31,12 +31,12 @@ export default function Earnings() {
 
 
     const [isFetching, setIsFetching] = useState(false);
+    const [error, setError] = useState(false);
     const [documentResponses, setDocumentResponses] = useState<{ documentType: string; fiscalPeriod: string; documentResponse: string; }[]>([]);
-
-
 
   
     const handleSubmit = async () => {
+        setError(false);
         if (!ticker) {
             alert('Please enter a ticker symbol');
             return;
@@ -51,12 +51,14 @@ export default function Earnings() {
         })
         .then((response) => response.json())
         .then((data) => {
-        console.log('Success:', data);
-        setIsFetching(false);
-        setDocumentResponses(data.documentResponses);
+            console.log('Success:', data);
+            setIsFetching(false);
+            setDocumentResponses(data.documentResponses);
         })
         .catch((error) => {
-        console.error('Error:', error);
+            setIsFetching(false);
+            setError(true);
+            console.error('Error:', error);
         });
     }
 
@@ -91,8 +93,8 @@ export default function Earnings() {
                 </div>
             <MultiSelectDropdown options={documentOptions} onChange={setDocumentType} />
             </div>
-            <button className='text-white bg-sky-700 px-4 rounded-md p-3' onClick={() => handleSubmit()}>Generate Report</button>
-            <DocumentResponseSection documentResponses={documentResponses} isFetching={isFetching} />
+            <button className='text-white bg-sky-700 px-4 rounded-md p-3' onClick={() => handleSubmit()} disabled={isFetching}> { isFetching ? 'Fetching Documents...' : 'Generate Report'}</button>
+            <DocumentResponseSection documentResponses={documentResponses} isFetching={isFetching} documentOptions={documentOptions} isUnexpectedError={error}/>
         </div>
     )
 
