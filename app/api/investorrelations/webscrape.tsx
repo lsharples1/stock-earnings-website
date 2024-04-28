@@ -31,10 +31,8 @@ export async function scrapeVisiblePageForLinks(irWebsite: string, relevantTerms
     }
     await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
 
-
     const relevantAnchors = await findRelevantAnchors(page, relevantTerms);
 
-    console.log('Length from scraping visible page for anchors', relevantAnchors.length);
     await browser.close();
     return relevantAnchors;
 }
@@ -62,7 +60,6 @@ export async function scrapeDynamicContentForLinks(irWebsite: string, relevantTe
         for (let i = 0; i < selectors.length; i++) {
             const relevantOptions = selectors[i].options.filter(option => relevantTerms.some(term => option.toLowerCase().includes(term.toLowerCase())));
             if (relevantOptions.length === 0) {
-                console.log(`skipping selector ${i}, no relevant options`);
                 continue;
             }
             
@@ -72,8 +69,6 @@ export async function scrapeDynamicContentForLinks(irWebsite: string, relevantTe
                 // wait for dynamic content to load
                 await new Promise(r => setTimeout(r, 3000));
                 const relevantAnchors = await findRelevantAnchors(page, relevantTerms);
-                console.log('evaluatePageForRelevantAnchors', relevantAnchors);
-                console.log(` anchors in dynamic content for selector ${i}, option ${option}`, relevantAnchors);
                 allAnchors = allAnchors.concat(relevantAnchors);
             }
 

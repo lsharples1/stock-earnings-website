@@ -20,9 +20,7 @@ export async function openAiChatResponse(prompt: string) {
           },
         ],
       })
-        console.log('openai response', response);
         const message = response.choices[0].message;
-        console.log('message', message);
         if (message.content) {
             return JSON.parse(message.content)
         } else {
@@ -43,9 +41,7 @@ export async function anthropicChatResponse(prompt: string) {
         { role: "user", content: prompt }
     ],
     });
-    console.log('anthropic response', response);
     const message = response.content[0];
-    console.log('message', message);
     if (message.text) {
         const parsedResponse = parseJsonArrayUtil(message.text);
         console.log('parsedResponse from anthropic model', parsedResponse);

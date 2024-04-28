@@ -57,7 +57,6 @@ async function getInvestorRelationsUrlUtil(ticker: string) {
         google_domain: 'google.com',
         api_key: process.env.SERP_API_KEY,
     });
-    console.log('serpResponse', serpResponse.organic_results);
     return serpResponse.organic_results[0].link;
 }
 
@@ -65,7 +64,6 @@ async function getQuarterlyResultsPageUrl(irWebsite: string) {
     const relevantTerms = ['earn', 'invest', 'relation', 'quarter', 'result', 'report', 'financ'];
     // first scrape the IR home page to find the link to the quarterly results page
     const links = await scrapeHomePageForLinks(irWebsite, relevantTerms);
-    console.log('links', links.length);
 
     // create a propmt asking OpenAI to interpret the links to find the quarterly results page
     const prompt = `Interpret the links to find the quarterly earnings results page for the company. Please return the link in this json format: {earningsPage: urlToEarningsPage}.
