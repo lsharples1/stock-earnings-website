@@ -1,6 +1,9 @@
 This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
 
 ## Getting Started
+Update .env.local with OpenAI, Anthropic, and SerpAPI keys
+nvm use 18.17.0 | npm install | npm run build | npm start
+
 
 First, run the development server:
 

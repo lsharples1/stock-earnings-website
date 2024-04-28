@@ -1,11 +1,11 @@
 
-export function mergeAndDedupeArrays(visibleLinks, hiddenLinks) {
+export function mergeAndDedupeArrays(visibleLinks: ({ href: string; text: string | undefined; } | null)[], hiddenLinks: ({ href: string; text: string | undefined; } | null)[]) {
     const combinedLinks = [...visibleLinks, ...hiddenLinks];
     const uniqueLinksMap = new Map();
 
     for (const link of combinedLinks) {
         // Use the href and text as the key because both properties are used to determine uniqueness
-        const key = `${link.href}|${link.text}`;
+        const key = `${link?.href}|${link?.text}`;
         if (!uniqueLinksMap.has(key)) {
             uniqueLinksMap.set(key, link);
         }

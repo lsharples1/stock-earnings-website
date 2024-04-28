@@ -68,7 +68,8 @@ async function getQuarterlyResultsPageUrl(irWebsite: string) {
     // create a propmt asking OpenAI to interpret the links to find the quarterly results page
     const prompt = `Interpret the links to find the quarterly earnings results page for the company. Please return the link in this json format: {earningsPage: urlToEarningsPage}.
     Some links are complete URLs, some are relative URLs, ensure you return the full URL using this base website as a guide: ${irWebsite}.
-    The links are: \n\n${links.map(link => link.href).join('\n')}`;
+    The links are: \n\n${links.map(link => link?.href).join('\n')}`; // Added null check for link
+
     const response = await openAiChatResponse(prompt);
     return response.earningsPage;
 }
@@ -115,7 +116,7 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     const hiddenLinks = await scrapeDynamicContentForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
  
     // merge the visible and hidden links and remove any duplicates
-    const allRelevantLinks = mergeAndDedupeArrays(visibleLinks, hiddenLinks);
+    const allRelevantLinks = mergeAndDedupeArrays(visibleLinks as ({ href: string; text: string | undefined; } | null)[], hiddenLinks as ({ href: string; text: string | undefined; } | null)[]);
 
 
     // Determine if we need to split this into multiple requests: simple way is to get totalDocumentResponses =  documentType.length * fiscalPeriod.length

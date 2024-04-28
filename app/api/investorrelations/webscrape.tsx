@@ -1,4 +1,4 @@
-import puppeteer from "puppeteer";
+import puppeteer, { Page } from "puppeteer";
 import { JSDOM } from 'jsdom';
 
 export async function scrapeHomePageForLinks(irWebsite: string, relevantTerms: string[]) {
@@ -10,8 +10,8 @@ export async function scrapeHomePageForLinks(irWebsite: string, relevantTerms: s
     // Get all <a> tags from the document
     const links = document.querySelectorAll('a');
     // only return if href and text content are not empty and text contains any of the relevant terms
-    const linkDetails = Array.from(links).map(link => {
-        if (link.href && link.textContent.trim() && relevantTerms.some(term => link.textContent.trim().toLowerCase().includes(term.toLowerCase()))) {
+    const linkDetails = Array.from(links).map((link): { href: string; text: string; } | null => {
+        if (link.href && link.textContent?.trim() && relevantTerms.some(term => link?.textContent?.trim().toLowerCase().includes(term.toLowerCase()))) {
             return { href: link.href, text: link.textContent.trim() }
         } else {
             return null;
@@ -47,7 +47,7 @@ export async function scrapeDynamicContentForLinks(irWebsite: string, relevantTe
         }
         await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
 
-        let allAnchors = [];
+        let allAnchors: any[] = [];
 
         // click on year selectors if they exist
         const selectors = await page.evaluate(() => {
@@ -83,19 +83,19 @@ export async function scrapeDynamicContentForLinks(irWebsite: string, relevantTe
     }
 }
 
-export async function findRelevantAnchors(page, relevantTerms: string[]) {
-    const anchors = await page.evaluate((relevantTerms) => {
+export async function findRelevantAnchors(page: Page, relevantTerms: string[]) {
+    const anchors = await page.evaluate((relevantTerms: any[]) => {
         const links = Array.from(document.querySelectorAll('a'));
         return links.map(link => {
             // Combine text from all child <span> elements
-            let spansText = Array.from(link.querySelectorAll('span'))
-            spansText = spansText.map(span => span.textContent.trim()).join(' ');
+            const spansTextArray = Array.from(link.querySelectorAll('span'))
+            const spansText = spansTextArray.map(span => span.textContent?.trim()).join(' '); // Added null check for span.textContent
                                    
-            const fullText = `${link.textContent.trim()} ${spansText}`.trim().toLowerCase();
+            const fullText = `${link?.textContent?.trim()} ${spansText}`.trim().toLowerCase(); // Added null check for link.textContent
             // Filter check for fiscal periods, years, and keywords
             
-            const isRelevantLink = relevantTerms.some(term => fullText.includes(term.toLowerCase()) || link.href.includes(term.toLowerCase()));
-            return isRelevantLink ? { href: link.href, text: link.textContent.trim() } : null;
+            const isRelevantLink = relevantTerms.some((term: string) => fullText.includes(term.toLowerCase()) || link.href.includes(term.toLowerCase()));
+            return isRelevantLink ? { href: link.href, text: link?.textContent?.trim() } : null;
         }).filter(Boolean); // Remove any nulls from the array
     }, relevantTerms);
     return anchors;
@@ -104,9 +104,8 @@ export async function findRelevantAnchors(page, relevantTerms: string[]) {
 export async function checkIfWeNeedUserAgent(url: string) {
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
-    let status = await page.goto(url, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
-    status = status.status();
+    const status = await page.goto(url, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
+    const statusValue = status?.status(); // Use conditional chaining and nullish coalescing to handle the possibility of status being undefined
     await browser.close();
-    return status !== 200;
-
+    return statusValue !== 200;
 }
