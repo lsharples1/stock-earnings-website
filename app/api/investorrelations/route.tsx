@@ -88,12 +88,8 @@ async function getQuarterlyResultsPageUrl(irWebsite: string) {
  * @returns documentResponses: [{ documentType: string; fiscalPeriod: string; documentResponse: string; }[]]
  */
 async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, documentType: string[], fiscalPeriod: string[]) {
-        // in order to filter our links, we need to make a list of relevant terms to look for.
+    // in order to filter our links, we need to make a list of relevant terms to look for.
     // lets start with the quarter and year of the fiscal period which will be in the format '1Q2024'  but we want to separate the quarter and year
-
-
-
-
     const quarters = fiscalPeriod.map(period => period.substring(0, 2));
     const years = fiscalPeriod.map(period => period.substring(2));
 
@@ -111,23 +107,21 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     if (documentType.includes('EarningsWebcast')) {
         keywords = keywords.concat(webcastKeywords);
     }
-
+    
     let relevantTerms = quarters.concat(years).concat(keywords);
     // remove any duplicates
     relevantTerms = [...new Set(relevantTerms)];
-    console.log('relevantTermms', relevantTerms);
 
     const needUserAgent = await checkIfWeNeedUserAgent(quarteryResultsPageUrl);
-    console.log('needUserAgent', needUserAgent);
+
+    // first we need to scrape the quarterly results page to find the links to the documents
+    const visibleLinks = await scrapeVisiblePageForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
 
     // we have to consider that the website has selectors or buttons for the year and if so we have to click on them to get the dynamic content
-    // const hiddenLinks = await scrapeDynamicContentForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
-
+    const hiddenLinks = await scrapeDynamicContentForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
  
-    // first we need to scrape the quarterly results page to find the links to the documents
-    let visibleLinks = await scrapeVisiblePageForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
-
-    console.log('visibleLinks', visibleLinks);
+    // merge the visible and hidden links and remove any duplicates
+    const allRelevantLinks = mergeAndDedupeArrays(visibleLinks, hiddenLinks);
 
 
     // Determine if we need to split this into multiple requests: simple way is to get totalDocumentResponses =  documentType.length * fiscalPeriod.length
@@ -142,17 +136,17 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
         const [documentTypePrompt1, documentTypePrompt2] = splitArray(documentType);
         const [fiscalPeriodPrompt1, fiscalPeriodPrompt2] = splitArray(fiscalPeriod);
 
-        const prompt1 = generateClaudePrompt(visibleLinks.filter(link => link !== null), documentTypePrompt1, fiscalPeriodPrompt1);
+        const prompt1 = generateClaudePrompt(allRelevantLinks.filter(link => link !== null), documentTypePrompt1, fiscalPeriodPrompt1);
         const response1 = await anthropicChatResponse(prompt1);
 
-        const prompt2 = generateClaudePrompt(visibleLinks.filter(link => link !== null), documentTypePrompt2, fiscalPeriodPrompt2);
+        const prompt2 = generateClaudePrompt(allRelevantLinks.filter(link => link !== null), documentTypePrompt2, fiscalPeriodPrompt2);
         const response2 = await anthropicChatResponse(prompt2);
 
         let overallResponse = response1.concat(response2);
         return overallResponse;
     }
 
-    const prompt = generateClaudePrompt(visibleLinks.filter(link => link !== null), documentType, fiscalPeriod);
+    const prompt = generateClaudePrompt(allRelevantLinks.filter(link => link !== null), documentType, fiscalPeriod);
     const response = await anthropicChatResponse(prompt);
     return response;  
 }
@@ -192,11 +186,25 @@ function generateClaudePrompt(visibleLinks: { href: string; text: string; }[], d
     return prompt;
 }
 
+function mergeAndDedupeArrays(visibleLinks, hiddenLinks) {
+    const combinedLinks = [...visibleLinks, ...hiddenLinks];
+    const uniqueLinksMap = new Map();
+
+    for (const link of combinedLinks) {
+        // Use the href and text as the key because both properties are used to determine uniqueness
+        const key = `${link.href}|${link.text}`;
+        if (!uniqueLinksMap.has(key)) {
+            uniqueLinksMap.set(key, link);
+        }
+    }
+    // Convert the map values back to an array
+    return Array.from(uniqueLinksMap.values());
+
+}
+
 
 
 async function scrapePageForLinks(irWebsite: string, relevantTerms: string[]) {
-    console.log('irWebsite', irWebsite);
-    console.log('relevantTerms', relevantTerms);
     const data = await fetch(irWebsite);
     const html = await data.text();
 
@@ -214,40 +222,24 @@ async function scrapePageForLinks(irWebsite: string, relevantTerms: string[]) {
     }
     ).filter(Boolean);
 
-    console.log('linkDetails', linkDetails);
     return linkDetails;  // You might want to return this if needed elsewhere
 }
 
 async function scrapeVisiblePageForLinks(irWebsite: string, relevantTerms: string[], needUserAgent: boolean) {
-    console.log('irWebsite', irWebsite);
-    console.log('relevantTerms', relevantTerms);
+
     const browser = await puppeteer.launch();
     const page = await browser.newPage();
     if (needUserAgent) {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
     }
-    let status = await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
-    status = status.status();
-    console.log('status', status);
+    await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
 
-    const anchors = await page.evaluate((relevantTerms) => {
-        const links = Array.from(document.querySelectorAll('a'));
-        return links.map(link => {
-            // Combine text from all child <span> elements
-            let spansText = Array.from(link.querySelectorAll('span'))
-            spansText = spansText.map(span => span.textContent.trim()).join(' ');
-                                   
-            const fullText = `${link.textContent.trim()} ${spansText}`.trim().toLowerCase();
-            // Filter check for fiscal periods, years, and keywords
-            
-            const isRelevantLink = relevantTerms.some(term => fullText.includes(term.toLowerCase()));
-            return isRelevantLink ? { href: link.href, text: link.textContent.trim() } : null;
-        }).filter(Boolean); // Remove any nulls from the array
-    }, relevantTerms);
 
-    console.log('Length from scraping visible page for anchors', anchors.length);
+    const relevantAnchors = await findRelevantAnchors(page, relevantTerms);
+
+    console.log('Length from scraping visible page for anchors', relevantAnchors.length);
     await browser.close();
-    return anchors;
+    return relevantAnchors;
 }
 
 async function scrapeDynamicContentForLinks(irWebsite: string, relevantTerms: string[], needUserAgent: boolean) {
@@ -260,19 +252,10 @@ async function scrapeDynamicContentForLinks(irWebsite: string, relevantTerms: st
         if (needUserAgent) {
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
         }
-        let status = await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
-        status = status.status();
-        console.log('status', status);
-        const anchors1 = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'));
-            const linksToReturn = [];
-            links.map(link => {
-                link.text.includes('Audio') && linksToReturn.push({href: link.href, text: link.textContent.trim(), class: link.className});
-            })
-            return linksToReturn;
-        });
-        console.log('anchors1length', anchors1);
-    
+        await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
+
+        let allAnchors = [];
+
         // click on year selectors if they exist
         const selectors = await page.evaluate(() => {
             const selectors = Array.from(document.querySelectorAll('select'));
@@ -280,33 +263,58 @@ async function scrapeDynamicContentForLinks(irWebsite: string, relevantTerms: st
                 return { name: selector.name, options: Array.from(selector.querySelectorAll('option')).map(option => option.value), class: selector.className, id: selector.id};
             });
         });
-        let allAnchors = [];
-        console.log('selectors', selectors);
-        console.log('selector 1 options', selectors[1].options[1]);
-        await page.waitForSelector(`#${selectors[1].id}`);
-        // await Promise.all([
-        //     page.waitForResponse
-        //     page.select(`#${selectors[1].id}`, selectors[1].options[1])
-        // ])
 
-        const anchors = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'));
-            const linksToReturn = [];
-            links.map(link => {
+        for (let i = 0; i < selectors.length; i++) {
+            const relevantOptions = selectors[i].options.filter(option => relevantTerms.some(term => option.toLowerCase().includes(term.toLowerCase())));
+            if (relevantOptions.length === 0) {
+                console.log(`skipping selector ${i}, no relevant options`);
+                continue;
+            }
+            console.log(`relevantOptions for selector ${i}`, relevantOptions);
+            
 
-                link.text.includes('Audio') && linksToReturn.push({href: link.href, text: link.textContent.trim(), class: link.className});
-            })
-            return linksToReturn;
-        });
-    console.log('anchors in dynamic content', anchors);
+            for (const option of relevantOptions) {
+                console.log(`clicking on selector, ${i} option ${option}`);
+                // only click on selectors that contain relevant terms
+                await page.select(`#${selectors[i].id}`, option);
+                await new Promise(r => setTimeout(r, 3000));
+                const relevantAnchors = await findRelevantAnchors(page, relevantTerms);
+                console.log('evaluatePageForRelevantAnchors', relevantAnchors);
+                console.log(` anchors in dynamic content for selector ${i}, option ${option}`, relevantAnchors);
+                allAnchors = allAnchors.concat(relevantAnchors);
+               
+
+            }
+
+        }
 
         await browser.close();
-
+        console.log('number of anchors', allAnchors.length)
+        return allAnchors;
         
     } catch (error) {
         console.error('Error with scraping dynamic content', error);
         browser.close();
     }
+}
+
+async function findRelevantAnchors(page, relevantTerms: string[]) {
+    const anchors = await page.evaluate((relevantTerms) => {
+        const links = Array.from(document.querySelectorAll('a'));
+        return links.map(link => {
+            // Combine text from all child <span> elements
+            let spansText = Array.from(link.querySelectorAll('span'))
+            spansText = spansText.map(span => span.textContent.trim()).join(' ');
+                                   
+            const fullText = `${link.textContent.trim()} ${spansText}`.trim().toLowerCase();
+            // Filter check for fiscal periods, years, and keywords
+            
+            const isRelevantLink = relevantTerms.some(term => fullText.includes(term.toLowerCase()) || link.href.includes(term.toLowerCase()));
+            return isRelevantLink ? { href: link.href, text: link.textContent.trim() } : null;
+        }).filter(Boolean); // Remove any nulls from the array
+    }, relevantTerms);
+    console.log('evaluatePageForRelevantLinks', anchors);
+    return anchors;
 }
 
 async function checkIfWeNeedUserAgent(url: string) {
@@ -320,28 +328,28 @@ async function checkIfWeNeedUserAgent(url: string) {
 
 }
 
-async function scrapeVisiblePageForLinksUnfiltered(irWebsite: string) {
-    console.log('irWebsite', irWebsite);
-    const browser = await puppeteer.launch({
-        headless: false,
-    });
-    const page = await browser.newPage();
-    await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
+// async function scrapeVisiblePageForLinksUnfiltered(irWebsite: string) {
+//     console.log('irWebsite', irWebsite);
+//     const browser = await puppeteer.launch({
+//         headless: false,
+//     });
+//     const page = await browser.newPage();
+//     await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
 
-    const anchors = await page.evaluate(() => {
-        const links = Array.from(document.querySelectorAll('a'));
-        const linksToReturn = [];
-        links.map(link => {
-            linksToReturn.push({href: link.href, text: link.textContent.trim(), class: link.className});
-        })
-        return linksToReturn;
-    }
-    );
-    console.log('SPANS', anchors.length);
+//     const anchors = await page.evaluate(() => {
+//         const links = Array.from(document.querySelectorAll('a'));
+//         const linksToReturn = [];
+//         links.map(link => {
+//             linksToReturn.push({href: link.href, text: link.textContent.trim(), class: link.className});
+//         })
+//         return linksToReturn;
+//     }
+//     );
+//     console.log('SPANS', anchors.length);
 
-    await browser.close();
-    return anchors;
-}
+//     await browser.close();
+//     return anchors;
+// }
 
 /**
  * 
