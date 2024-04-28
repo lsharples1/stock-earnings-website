@@ -5,7 +5,6 @@ import { JSDOM } from 'jsdom';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { getJson } from 'serpapi';
-import { stat } from "fs";
 
 /**
  * 
@@ -32,6 +31,7 @@ async function getDocumentResponses(body: { ticker: string; documentType: string
      // 2. using the investor relations website, get the quarterly results page url
      const quarterlyResultsPageUrl = await getQuarterlyResultsPageUrl(investorRelationsPageUrl);
      console.log('quarterlyResultsPageUrl', quarterlyResultsPageUrl);
+    // const quarterlyResultsPageUrl = 'https://investors.block.xyz/financials/quarterly-earnings-reports/default.aspx'
      // 3. using the quarterly results page, get the documents for the specified document type(s) and fiscal period(s)
      const documentResponses = await findDocumentsFromIRWebsite(quarterlyResultsPageUrl, body.documentType, body.fiscalPeriod);
      console.log('documentResponses', documentResponses);
@@ -82,7 +82,7 @@ async function getQuarterlyResultsPageUrl(irWebsite: string) {
 
 /**
  * 
- * @param quarteryResultsPageUrl the url for the quarterly results page of the investor relations website
+ * @param quarterlyResultsPageUrl the url for the quarterly results page of the investor relations website
  * @param documentType  containing any of [EarningsRelease, EarningsPresentation, EarningsWebcast]
  * @param fiscalPeriod containing 1+ fiscal periods to return documents for
  * @returns documentResponses: [{ documentType: string; fiscalPeriod: string; documentResponse: string; }[]]
@@ -97,7 +97,7 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
 
     const relaseKeywords = ['release', 'report', 'summary'];
     const presentationKeywords = ['presentation', 'deck', 'slide'];
-    const webcastKeywords = ['webcast', 'call', 'webinar', 'conference'];
+    const webcastKeywords = ['webcast', 'call', 'webinar', 'conference', 'audio'];
 
     let keywords = ['earn', 'earnings', 'invest', 'investor', 'press', 'analyst'];
     if (documentType.includes('EarningsRelease')) {
@@ -117,11 +117,16 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
 
     const needUserAgent = await checkIfWeNeedUserAgent(quarteryResultsPageUrl);
     console.log('needUserAgent', needUserAgent);
+
+    // we have to consider that the website has selectors or buttons for the year and if so we have to click on them to get the dynamic content
+    // const hiddenLinks = await scrapeDynamicContentForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
+
  
     // first we need to scrape the quarterly results page to find the links to the documents
     let visibleLinks = await scrapeVisiblePageForLinks(quarteryResultsPageUrl, relevantTerms, needUserAgent);
 
     console.log('visibleLinks', visibleLinks);
+
 
 
 
@@ -149,6 +154,8 @@ async function findDocumentsFromIRWebsite(quarteryResultsPageUrl: string, docume
     const response = await anthropicChatResponse(prompt);
     console.log('response', response);  
     return response;  
+
+    // return [{ documentType: 'EarningsRelease', fiscalPeriod: '1Q2024', documentResponse: 'https://example.com' }];
 }
 
 
@@ -208,6 +215,65 @@ async function scrapeVisiblePageForLinks(irWebsite: string, relevantTerms: strin
     console.log('Length from scraping visible page for anchors', anchors.length);
     await browser.close();
     return anchors;
+}
+
+async function scrapeDynamicContentForLinks(irWebsite: string, relevantTerms: string[], needUserAgent: boolean) {
+    console.log('irWebsite', irWebsite);
+    console.log('relevantTerms', relevantTerms);
+    const browser = await puppeteer.launch();
+    const page = await browser.newPage();
+    try {
+
+        if (needUserAgent) {
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3');
+        }
+        let status = await page.goto(irWebsite, { waitUntil: 'networkidle0' }); // Ensures all scripts are fully loaded
+        status = status.status();
+        console.log('status', status);
+        const anchors1 = await page.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a'));
+            const linksToReturn = [];
+            links.map(link => {
+                link.text.includes('Audio') && linksToReturn.push({href: link.href, text: link.textContent.trim(), class: link.className});
+            })
+            return linksToReturn;
+        });
+        console.log('anchors1length', anchors1);
+    
+        // click on year selectors if they exist
+        const selectors = await page.evaluate(() => {
+            const selectors = Array.from(document.querySelectorAll('select'));
+            return selectors.map(selector => {
+                return { name: selector.name, options: Array.from(selector.querySelectorAll('option')).map(option => option.value), class: selector.className, id: selector.id};
+            });
+        });
+        let allAnchors = [];
+        console.log('selectors', selectors);
+        console.log('selector 1 options', selectors[1].options[1]);
+        await page.waitForSelector(`#${selectors[1].id}`);
+        // await Promise.all([
+        //     page.waitForResponse
+        //     page.select(`#${selectors[1].id}`, selectors[1].options[1])
+        // ])
+
+        const anchors = await page.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a'));
+            const linksToReturn = [];
+            links.map(link => {
+
+                link.text.includes('Audio') && linksToReturn.push({href: link.href, text: link.textContent.trim(), class: link.className});
+            })
+            return linksToReturn;
+        });
+    console.log('anchors in dynamic content', anchors);
+
+        await browser.close();
+
+        
+    } catch (error) {
+        console.error('Error with scraping dynamic content', error);
+        browser.close();
+    }
 }
 
 async function checkIfWeNeedUserAgent(url: string) {
